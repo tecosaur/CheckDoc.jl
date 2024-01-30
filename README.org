@@ -1,0 +1,13 @@
+#+title: CheckDoc
+#+author: tecosaur
+
+A Julia docstring linter to check for various quality indications, taking into
+account the method(s) a docstring applies to.
+
+*Basic usage*
+
+#+begin_src julia-repl
+julia> using CheckDoc
+
+julia> checkdocs(MyPackage)
+#+end_src
