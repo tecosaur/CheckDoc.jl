@@ -9,6 +9,8 @@ include("display.jl")
 include("utils.jl")
 include("checks.jl")
 
+__init__() = foreach(addface!, CHECKDOC_FACES)
+
 CHECKS = Pair{Symbol, Function}[
     # Specially handled checks
     :macro => Returns(nothing),
