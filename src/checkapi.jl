@@ -8,6 +8,7 @@ abstract type AbstractCheck end
 struct DocContext{T}
     kind::Symbol
     binding::Binding
+    alias::Union{Binding, Nothing}
     source::Union{LineNumber, Nothing}
     data::Dict{Symbol, Any}
     raw::String

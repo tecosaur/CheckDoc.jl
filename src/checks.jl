@@ -37,7 +37,8 @@ terminal(::ExistenceCheck) = true
 @static if VERSION >= v"1.11"
     function check(::PublicHaveDoc, doc::DocContext)
         isdefined(doc.binding.mod, doc.binding.var) || return
-        if isnothing(doc.parsed) && Base.ispublic(doc.binding.mod, doc.binding.var)
+        if isnothing(doc.parsed) && Base.ispublic(doc.binding.mod, doc.binding.var) &&
+            !(!isnothing(doc.alias) && Base.ispublic(doc.alias.mod, doc.alias.var))
             ShortIssue(:error, "Should be documented")
         end
     end

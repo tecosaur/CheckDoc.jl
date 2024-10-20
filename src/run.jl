@@ -21,7 +21,7 @@ function runchecks(mod::Module, checks::Vector{AbstractCheck})
 end
 
 function runchecks(mod::Module, names::Vector{Symbol}, checks::Vector{AbstractCheck})
-    bindings = [Docs.aliasof(Binding(mod, name)) for name in names] |> unique
+    bindings = [Binding(mod, name) for name in names] |> unique
     runchecks(mod, bindings, checks)
 end
 
@@ -30,7 +30,7 @@ function runchecks(mod::Module, binding::Binding, checks::Vector{AbstractCheck})
 end
 
 function runchecks(mod::Module, name::Symbol, checks::Vector{AbstractCheck})
-    runchecks(mod, Docs.aliasof(Binding(mod, name)), checks)
+    runchecks(mod, Binding(mod, name), checks)
 end
 
 function runchecks(mod::Module, bindings::Vector{Docs.Binding}, checks::Vector{AbstractCheck})
@@ -59,7 +59,7 @@ function bindings(mod::Module; recurse::Bool=true)
         end
     end
     addbinds!(allbinds, modseen, mod, recurse)
-    map(Docs.aliasof, allbinds) |> unique
+    allbinds
 end
 
 function recursivedocs(mod::Module)
@@ -96,20 +96,31 @@ function recursivedocs(mod::Module)
     alldocs
 end
 
+function reversealiases(alldocs::IdDict)
+    aliases = IdDict{Binding, Binding}()
+    for (bind, doc) in alldocs
+        alias = Docs.aliasof(bind)
+        if !isnothing(alias) && alias !== bind
+            aliases[alias] = bind
+        end
+    end
+    aliases
+end
+
 function runchecks(alldocs::IdDict, bindings::Vector{Docs.Binding}, checks::Vector{AbstractCheck})
     issues = DocIssue[]
     checks = sort(checks, by=priority)
     for bind in bindings
-        bissues = runchecks(alldocs, bind, checks)
+        bissues = runchecks(alldocs, reversealiases(alldocs), bind, checks)
         !isempty(bissues) && append!(issues, bissues)
     end
     issues
 end
 
-function runchecks(alldocs::IdDict, bind::Docs.Binding, checks::Vector{AbstractCheck})
+function runchecks(alldocs::IdDict, raliases::IdDict, bind::Docs.Binding, checks::Vector{AbstractCheck})
     issues = DocIssue[]
     checks = sort(checks, by=priority)
-    for doc in doccontexts(alldocs, bind)
+    for doc in doccontexts(alldocs, raliases, bind)
         for chk in checks
             applicable(chk, doc.kind) || continue
             results = check(chk, doc)
@@ -142,11 +153,18 @@ function runchecks(source::Union{Module, IdDict},
     runchecks(source, target, Vector{AbstractCheck}(checks))
 end
 
-function doccontexts(alldocs::IdDict, bind::Docs.Binding)
+function doccontexts(alldocs::IdDict, raliases::IdDict, bind::Docs.Binding)
     res = if isdefined(bind.mod, bind.var)
         resolve(bind)
     end
     category = bindkind(bind)
+    if !haskey(alldocs, bind)
+        alias = Docs.aliasof(bind)
+        if haskey(alldocs, alias)
+            bind = alias
+        end
+    end
+    ralias = get(raliases, bind, nothing)
     if haskey(alldocs, bind)
         Iterators.map(alldocs[bind].docs |> values) do doc
             raw = join(doc.text)
@@ -167,10 +185,10 @@ function doccontexts(alldocs::IdDict, bind::Docs.Binding)
                 if haskey(doc.data, :path) && haskey(doc.data, :linenumber)
                     LineNumber(doc.data[:path], doc.data[:linenumber])
                 end)
-            DocContext(category, bind, docsource, doc.data, raw, parsed)
+            DocContext(category, bind, ralias, docsource, doc.data, raw, parsed)
         end
     else
-        [DocContext(category, bind, nothing, Dict{Symbol, Any}(), "", nothing)]
+        [DocContext(category, bind, ralias, nothing, Dict{Symbol, Any}(), "", nothing)]
     end
 end
 
