@@ -33,7 +33,6 @@ function check(::ExistenceCheck, doc::DocContext)
     end
 end
 terminal(::ExistenceCheck) = true
-priority(::ExistenceCheck) = -95
 
 @static if VERSION >= v"1.11"
     function check(::PublicHaveDoc, doc::DocContext)
@@ -43,6 +42,13 @@ priority(::ExistenceCheck) = -95
         end
     end
 end
+
+priority(::Type{PublicHaveDoc}) = -96
+priority(::Type{FunctionsHaveDoc}) = -95
+priority(::Type{MacrosHaveDoc}) = -94
+priority(::Type{TypesHaveDoc}) = -93
+priority(::Type{VariablesHaveDoc}) = -92
+priority(::Type{<:ExistenceCheck}) = -90
 
 abstract type ContentsCheck <: AbstractCheck end
 
@@ -59,7 +65,7 @@ function check(::NonEmpty, doc::DocContext)
     end
 end
 
-priority(::NonEmpty) = -90
+priority(::Type{NonEmpty}) = -80
 terminal(::NonEmpty) = true
 
 struct MentionsPotentialErrors <: ContentsCheck end
@@ -126,7 +132,7 @@ function check(::IncludesAllArgs, doc::DocContext{Markdown.MD})
     issues = ShortIssue[]
     for arg in argnames
         if arg ∉ allcode
-            push!(issues, ShortIssue(:warning, S"The argument {emphasis:$arg} should be mentioned"))
+            push!(issues, ShortIssue(:warning, S"The argument {code,emphasis:$arg} should be mentioned"))
         end
     end
     issues
@@ -152,7 +158,7 @@ function check(::IncludesAllKwargs, doc::DocContext{Markdown.MD})
     issues = ShortIssue[]
     for kwarg in kwargnames
         if kwarg ∉ allcode
-            push!(issues, ShortIssue(:warning, S"The keyword argument {emphasis:$kwarg} should be mentioned"))
+            push!(issues, ShortIssue(:warning, S"The keyword argument {code,emphasis:$kwarg} should be mentioned"))
         end
     end
     issues
@@ -331,11 +337,11 @@ function check(::ParagraphTermination, doc::DocContext{Markdown.MD})
         content = strip(sprint(print, Markdown.MD([para])))
         if last(content) ∉ ('.', '!', '?', ':')
             tail = if textwidth(content) < 15
-                content
+                S"{green:$content}"
             else
-                S"{shadow:…}{green:$(content[thisind(content, end-15):end])}"
+                S"{shadow:…}{green:$(content[thisind(content, end-14):end])}"
             end
-            push!(issues, ShortIssue(:suggestion, S"Paragraph should end with a punctuation mark (currently: $tail)"))
+            push!(issues, ShortIssue(:suggestion, S"Paragraph \"$tail\" should end with a punctuation mark"))
         end
     end
     issues
@@ -350,11 +356,11 @@ function check(::SectionCapitalization, doc::DocContext{Markdown.MD})
         content = strip(sprint(print, Markdown.MD(sec.text)))
         if islowercase(first(content))
             head = if textwidth(content) < 15
-                content
+                S"{green:$content}"
             else
                 S"{green:$(content[1:thisind(content, 15)])}{shadow:…}"
             end
-            push!(issues, ShortIssue(:suggestion, S"Section does not start with a capital letter (currently: $head)"))
+            push!(issues, ShortIssue(:suggestion, S"Section \"$head\" does not start with a capital letter"))
         end
     end
     issues
@@ -377,7 +383,7 @@ function check(::SentenceCapitalization, doc::DocContext{Markdown.MD})
                 else
                     S"{green:$(sentence[1:thisind(sentence, 15)])}{shadow:…}"
                 end
-                push!(issues, ShortIssue(:suggestion, S"Sentence does not start with a capital letter (currently: $head)"))
+                push!(issues, ShortIssue(:suggestion, S"Sentence \"$head\" does not start with a capital letter"))
             end
             lastboundary = something(findlast(c -> isspace(c) || (c != '.' && ispunct(c)), sentence), 0)
             lastword = sentence[nextind(sentence, lastboundary):end]
@@ -407,7 +413,7 @@ function check(::SummaryBrief, doc::DocContext{Markdown.MD})
     firstpara = first(paras)
     paralen = textwidth(strip(sprint(print, Markdown.MD([first(paras)]))))
     if paralen > 96
-        ShortIssue(:suggestion, S"The summary line should be brief, less than {emphasis:96} characters long (currently: {warning:$paralen})")
+        ShortIssue(:suggestion, S"The summary line should be brief, but is currently {warning:$paralen} {bold:>} {success:96} characters long")
     end
 end
 
@@ -427,9 +433,9 @@ function check(::ArgsInOrder, doc::DocContext{Markdown.MD})
                          mdfindall(Markdown.Code, doc.parsed)))
     argorder = filter(!isnothing, indexin(argnames, allcode))
     if !issorted(argorder)
-        given = join(map(a -> S"{code:$a}", argnames), ", ")
-        mentioned = join(map(a -> S"{code:$a}", allcode[sort(argorder)]), ", ")
-        ShortIssue(:suggestion, S"It is nice to document the arguments in the order they are given ($given rather than $mentioned).")
+        given = join(map(a -> S"{code,emphasis,success:$a}", argnames), ", ")
+        mentioned = join(map(a -> S"{code,emphasis,warning:$a}", allcode[sort(argorder)]), ", ")
+        ShortIssue(:tip, S"It is nice to describe the arguments in the same order they are listed in the signature ($given rather than $mentioned).")
     end
 end
 

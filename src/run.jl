@@ -38,10 +38,10 @@ function runchecks(mod::Module, bindings::Vector{Docs.Binding}, checks::Vector{A
     runchecks(alldocs, bindings, checks)
 end
 
-function bindings(mod::Module)
+function bindings(mod::Module; recurse::Bool=true)
     allbinds = Binding[]
     modseen = Set{Module}()
-    function addbinds!(to::Vector{Binding}, seen::Set{Module}, submod::Module)
+    function addbinds!(to::Vector{Binding}, seen::Set{Module}, submod::Module, recurse::Bool)
         push!(seen, submod)
         for name in names(submod, all=true)
             name ∈ (:eval, :include, :__init__) && continue
@@ -49,7 +49,7 @@ function bindings(mod::Module)
             startswith(String(name), '#') && continue
             val = getglobal(submod, name)
             if val isa Module && parentmodule(val) === submod
-                val ∉ seen && addbinds!(to, seen, val)
+                val ∉ seen && recurse && addbinds!(to, seen, val, recurse)
             elseif val isa Function || (val isa Type && typeof(val) ∉ (Union, UnionAll, Core.TypeofBottom))
                 parentmodule(val) === submod &&
                     push!(to, Binding(submod, name))
@@ -58,7 +58,7 @@ function bindings(mod::Module)
             end
         end
     end
-    addbinds!(allbinds, modseen, mod)
+    addbinds!(allbinds, modseen, mod, recurse)
     map(Docs.aliasof, allbinds) |> unique
 end
 

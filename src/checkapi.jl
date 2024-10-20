@@ -60,9 +60,13 @@ function applicable end
 applicable(::AbstractCheck, ::Symbol) = true
 
 """
+    priority(check::Type{<:AbstractCheck}) -> Integer
     priority(check::AbstractCheck) -> Integer
 
 How important it is that `check` is satisfied.
+
+`check` can be either a type or an instance of a check. The generic
+instance-based method forwards to the type-based method.
 
 Lower values are considered more important, and the default is `0`.
 
@@ -72,7 +76,8 @@ and the order in which issues are displayed.
 """
 function priority end
 
-priority(::AbstractCheck) = 0
+priority(::Type{<:AbstractCheck}) = 0
+priority(c::AbstractCheck) = priority(typeof(c))
 
 """
     terminal(check::AbstractCheck, doc::DocContext) -> Bool

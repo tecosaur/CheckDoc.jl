@@ -21,8 +21,8 @@ Base.firstindex(rep::DocsReport) = 1
 Base.lastindex(rep::DocsReport) = sum((sum(length ∘ last, group, init=0) for (_, group) in rep.issues), init=0)
 Base.length(rep::DocsReport) = lastindex(rep)
 
-function checkdocs(mod::Module, checks::Vector{AbstractCheck} = DEFAULT_CHECKS; kwargs...)
-    binds = bindings(mod)
+function checkdocs(mod::Module, checks::Vector{AbstractCheck} = DEFAULT_CHECKS; recurse::Bool=true, kwargs...)
+    binds = bindings(mod; recurse)
     issues = runchecks(mod, binds, checks)
     igroups, maxlevel = aggregateissues(issues; kwargs...)
     DocsReport(mod, binds, checks, igroups, maxlevel)
@@ -43,7 +43,7 @@ function aggregateissues(issues::Vector{DocIssue}; by::Union{Symbol, Tuple{Symbo
         elseif by ∈ (:issue, :kind, :check)
             :name
         else
-            :issue
+            :severity
         end
     end
     groupissues(issues, groupkind(by1), groupkind(by2)), maxlevel
@@ -105,6 +105,10 @@ function groupissues(issues::Vector{DocIssue}, gkind::Type)::Vector{Pair{gkind, 
     end
     if gkind === Int
         sort!(grouporder)
+    elseif gkind === Binding
+        sort!(grouporder, by = b -> (nameof(b.mod), b.var))
+    else
+        sort!(grouporder, by = priority)
     end
     [grp => groups[grp] for grp in grouporder]
 end
@@ -116,13 +120,26 @@ end
 
 function Base.show(io::IO, ::MIME"text/plain", issue::DocIssue)
     sface, slabel = get(SEVERITIES, issue.severity, (:bright_black, "Unknown"))
-    srcloc = if isnothing(issue.source) styled"{italic,shadow:unknown:unknown} (within {underline:$(pkgdir(issue.binding.mod))})" else
-        styled"{underline:$(issue.source.file){magenta::$(issue.source.line)}}" end
     show(io, DocIssue)
     print(io, styled"""({$sface,bold:$slabel}): \
                          {yellow:$(label(issue.check))}({green:"$(issue.message)"})\n  \
                          binding: {code:$(issue.binding)}\n  \
-                         source:  $srcloc""")
+                         source:  $(srcloc(issue))""")
+end
+
+function srcloc(issue::DocIssue)
+    if isnothing(issue.source)
+        dir = pkgdir(issue.binding.mod)
+        if isnothing(dir)
+            S"{shadow:{italic:@} unknown}"
+        else
+            S"{shadow,light:within $(contractuser(dir))}"
+        end
+    else
+        dir = joinpath(contractuser(dirname(issue.source.file)), "")
+        file = basename(issue.source.file)
+        S"{shadow:{italic:@} {light:$dir}{underline:$file}:{italic:$(issue.source.line)}}"
+    end
 end
 
 function Base.show(io::IO, ::MIME"text/plain", report::DocsReport{G1, G2}) where {G1, G2}
@@ -153,14 +170,14 @@ function Base.show(io::IO, ::MIME"text/plain", report::DocsReport{G1, G2}) where
         (isempty(sgroup) || all(isempty ∘ last, sgroup)) && continue
         groupissues = collect(Iterators.map(last, sgroup) |> Iterators.flatten)
         gface, glabel = gstyle(G1, groupissues)
-        print(io, styled"\n{$gface:╭─● {bold:$glabel}}")
+        print(io, styled"\n{$gface:╭─● {bold:$glabel} ($(length(groupissues)))}")
         for (subgroup, issues) in sgroup
             sgface, sglabel = gstyle(G2, issues)
-            print(io, styled"\n{$gface:│} {$sgface:┌ $sglabel}")
+            print(io, styled"\n{$gface:│} {$sgface:┌ $sglabel ($(length(issues)))}")
             samemessage = allequal(i -> i.message, issues)
             samemessage &&
                 print(io, styled"{$sgface::} ", first(issues).message)
-            gutterprefix_cc = styled"\n{$gface:│} {$sgface:│}"
+            gutterprefix_cc = styled"\n{$gface:│} {$sgface:┆}"
             gutterprefix_ce = styled"\n{$gface:│} {$sgface:└}"
             gutterprefix_ee = styled"\n{$gface:╰} {$sgface:└}"
             for issue in issues
@@ -175,12 +192,7 @@ function Base.show(io::IO, ::MIME"text/plain", report::DocsReport{G1, G2}) where
                       else
                           gutterprefix_cc
                       end,
-                      styled" {bold:$(lpad(icount, ndigits(totalissues))).} {$iface:$ilabel}",
-                      if isnothing(issue.source)
-                          styled" {shadow:{bold,italic:@} unknown {light:(within $(pkgdir(issue.binding.mod)))}}"
-                      else
-                          styled" {shadow:{bold,italic:@} $(issue.source.file):$(issue.source.line)}"
-                      end)
+                      styled" {bold:$(lpad(icount, ndigits(totalissues))).} {$iface:$ilabel} $(srcloc(issue))")
                 if !samemessage
                     print(io, if issue == last(issues) && subgroup == first(last(sgroup))
                               gutterprefix_ee
