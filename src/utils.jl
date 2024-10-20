@@ -80,6 +80,7 @@ the function, arguments, and keyword arguments specified in `sig`:
   indicating whether the argument has a default value.
 - `kwargs`: A vector of keyword-argument forms, also a three-value tuple, but with just
   a single `Symbol` as the first value.
+- `argnames`: A vector of all `args` and `kwargs` names, for convenience.
 
 If multiple signatures are present in `sig`, the first is used.  If the
 signature could not be determined, `nothing` is returned.
@@ -150,7 +151,12 @@ function parse_signature(sig::String)
         for arg in expr.args[2+!isempty(kwargs):end]
             interpretarg!(args, arg)
         end
-        (; name, args, kwargs)
+        argnames = Symbol[]
+        for (a, _, _) in args
+            append!(argnames, a)
+        end
+        append!(argnames, map(first, kwargs))
+        (; name, args, kwargs, argnames)
     end
 end
 
