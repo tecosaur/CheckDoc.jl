@@ -18,6 +18,7 @@ end
 function mdfindall(::Type{T}, textual::Union{Markdown.Header, Markdown.Footnote,
                                              Markdown.Italic, Markdown.Bold, Markdown.Link},
                    sofar::Vector{T}) where {T}
+    isnothing(textual.text) && return sofar
     for thing in textual.text
         if thing isa T
             push!(sofar, thing)
@@ -89,6 +90,9 @@ function parse_signature(sig::String)
     # TODO extract /all/ signatures
     exprs = Meta.parseall(sig)
     expr = first(filter(e -> !(e isa LineNumberNode), exprs.args))
+    if Meta.isexpr(expr, :(=), 2)
+        expr = last(expr.args)
+    end
     if Meta.isexpr(expr, :(::), 2) || Meta.isexpr(expr, :->, 2)
         expr = first(expr.args)
     end
@@ -113,12 +117,14 @@ function parse_signature(sig::String)
             vars, type = interpretarg(arg.args[1])
             if kw
                 ([Symbol(string(first(vars), "..."))],
-                 :NamedTuple, false) # Not quite, but effetcively...
+                 :NamedTuple, false) # Not quite, but effectively...
             else
                 (vars, Expr(:curly, :Vararg, type), false)
             end
         elseif Meta.isexpr(arg, :(::), 2)
             ([arg.args[1]], arg.args[2], hasdefault)
+        elseif Meta.isexpr(arg, :(::), 1) && Meta.isexpr(arg.args[1], :curly) && arg.args[1].args[1] === :Type
+            ([arg.args[1].args[2]], :Type, hasdefault)
         elseif arg isa Symbol
             ([arg], :Any, hasdefault)
         end
@@ -137,10 +143,11 @@ function parse_signature(sig::String)
         acc
     end
     if Meta.isexpr(expr, :call)
-        name = first(expr.args)
+        func = first(expr.args)
         args = Tuple{Vector{Symbol}, Union{Symbol, Expr}, Bool}[]
         kwargs = Tuple{Symbol, Union{Symbol, Expr}, Bool}[]
-        length(expr.args) == 1 && return (; name, args, kwargs)
+        argnames = Symbol[]
+        length(expr.args) == 1 && return (; func, args, kwargs, argnames)
         if Meta.isexpr(expr.args[2], :parameters)
             kws = Tuple{Vector{Symbol}, Union{Symbol, Expr}, Bool}[]
             for kw in expr.args[2].args
@@ -151,12 +158,11 @@ function parse_signature(sig::String)
         for arg in expr.args[2+!isempty(kwargs):end]
             interpretarg!(args, arg)
         end
-        argnames = Symbol[]
         for (a, _, _) in args
             append!(argnames, a)
         end
         append!(argnames, map(first, kwargs))
-        (; name, args, kwargs, argnames)
+        (; func, args, kwargs, argnames)
     end
 end
 

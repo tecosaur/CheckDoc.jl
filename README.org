@@ -11,3 +11,15 @@ julia> using CheckDoc
 
 julia> checkdocs(MyPackage)
 #+end_src
+
+*Target docstring format*
+
+The built-in rules ask you to formulate docstrings like so:
+
+#+begin_src text
+    SIGNATURE
+
+Concise summary, as a complete sentence in an imperitive style.
+
+Elaboration, mentioning all arguments and keyword arguments in order (when a function).
+#+end_src

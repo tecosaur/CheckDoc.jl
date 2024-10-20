@@ -46,7 +46,7 @@ function aggregateissues(issues::Vector{DocIssue}; by::Union{Symbol, Tuple{Symbo
             :issue
         end
     end
-    groupissues(issues, by1, by2), maxlevel
+    groupissues(issues, groupkind(by1), groupkind(by2)), maxlevel
 end
 
 function checkdocs(binding::Binding, checks::Vector{AbstractCheck} = DEFAULT_CHECKS; kwargs...)
@@ -73,16 +73,19 @@ checkdocs(thing::Union{Binding, Symbol, Function}, checks::Vector{<:AbstractChec
 checkdocs(mod::Module, name::Symbol, checks::Vector{<:AbstractCheck}; kwargs...) =
     checkdocs(mod, name, Vector{AbstractCheck}(checks); kwargs...)
 
-function groupissues(issues::Vector{DocIssue}, groupby::Symbol, subgroup::Union{Symbol, Nothing}=nothing)
-    gkind = if groupby ∈ (:severity, :level)
+function groupkind(name::Symbol)
+    if name ∈ (:severity, :level)
         Int
-    elseif groupby ∈ (:name, :entity)
+    elseif name ∈ (:name, :entity)
         Binding
-    elseif groupby ∈ (:issue, :kind, :check)
+    elseif name ∈ (:issue, :kind, :check)
         Type{<:AbstractCheck}
     else
-        throw(ArgumentError("Unknown grouping key: $groupby"))
+        throw(ArgumentError("Unknown grouping key: $name"))
     end
+end
+
+function groupissues(issues::Vector{DocIssue}, gkind::Type)::Vector{Pair{gkind, Vector{DocIssue}}}
     groups = Dict{gkind, Vector{DocIssue}}()
     grouporder = Vector{gkind}()
     for issue in issues
@@ -103,11 +106,12 @@ function groupissues(issues::Vector{DocIssue}, groupby::Symbol, subgroup::Union{
     if gkind === Int
         sort!(grouporder)
     end
-    if isnothing(subgroup)
-        [grp => groups[grp] for grp in grouporder]
-    else
-        [grp => groupissues(groups[grp], subgroup, nothing) for grp in grouporder]
-    end
+    [grp => groups[grp] for grp in grouporder]
+end
+
+function groupissues(issues::Vector{DocIssue}, gkind::Type, gskind::Type)::Vector{Pair{gkind, Vector{Pair{gskind, Vector{DocIssue}}}}}
+    groups = groupissues(issues, gkind)
+    [grp => groupissues(gissues, gskind) for (grp, gissues) in groups]
 end
 
 function Base.show(io::IO, ::MIME"text/plain", issue::DocIssue)
@@ -137,14 +141,14 @@ function Base.show(io::IO, ::MIME"text/plain", report::DocsReport{G1, G2}) where
         get(SEVERITIES, first(issues).severity, (:bright_black, "Unknown"))
     gstyle(group::Type{Binding}, issues::Vector{DocIssue}) =
         :code, chopprefix(string(first(issues).binding), "$(report.mod).")
-    gstyle(group::Type{DataType}, issues::Vector{DocIssue}) =
+    gstyle(group::Type{Type{<:CheckDoc.AbstractCheck}}, issues::Vector{DocIssue}) =
         (if allequal(i -> i.severity, issues)
              get(SEVERITIES, first(issues).severity, (:bright_black, "")) |> first
          else
              :default
          end,
          label(first(issues).check))
-    G3 = first(setdiff((Int, Binding, DataType), (G1, G2)))
+    G3 = first(setdiff((Int, Binding, Type{<:CheckDoc.AbstractCheck}), (G1, G2)))
     for (group, sgroup) in report.issues
         (isempty(sgroup) || all(isempty ∘ last, sgroup)) && continue
         groupissues = collect(Iterators.map(last, sgroup) |> Iterators.flatten)
@@ -156,19 +160,36 @@ function Base.show(io::IO, ::MIME"text/plain", report::DocsReport{G1, G2}) where
             samemessage = allequal(i -> i.message, issues)
             samemessage &&
                 print(io, styled"{$sgface::} ", first(issues).message)
+            gutterprefix_cc = styled"\n{$gface:│} {$sgface:│}"
+            gutterprefix_ce = styled"\n{$gface:│} {$sgface:└}"
+            gutterprefix_ee = styled"\n{$gface:╰} {$sgface:└}"
             for issue in issues
                 icount += 1
                 iface, ilabel = gstyle(G3, [issue])
-                gutterprefix = styled"\n{$gface:$(ifelse(issue == last(issues) && subgroup == first(last(sgroup)), '╰', '│'))} \
-                                 {$sgface:$(ifelse(issue == last(issues), '└', '│'))}"
-                print(io, gutterprefix, styled" {bold:$(lpad(icount, ndigits(totalissues))).} {$iface:$ilabel}",
+                print(io, if !samemessage
+                          gutterprefix_cc
+                      elseif issue == last(issues) && subgroup == first(last(sgroup))
+                          gutterprefix_ee
+                      elseif issue == last(issues)
+                          gutterprefix_ce
+                      else
+                          gutterprefix_cc
+                      end,
+                      styled" {bold:$(lpad(icount, ndigits(totalissues))).} {$iface:$ilabel}",
                       if isnothing(issue.source)
                           styled" {shadow:{bold,italic:@} unknown {light:(within $(pkgdir(issue.binding.mod)))}}"
                       else
                           styled" {shadow:{bold,italic:@} $(issue.source.file):$(issue.source.line)}"
                       end)
                 if !samemessage
-                    print(io, gutterprefix, ' '^(2+ndigits(totalissues)), ' ', issue.message)
+                    print(io, if issue == last(issues) && subgroup == first(last(sgroup))
+                              gutterprefix_ee
+                          elseif issue == last(issues)
+                              gutterprefix_ce
+                          else
+                              gutterprefix_cc
+                          end,
+                          ' '^(2+ndigits(totalissues)), ' ', issue.message)
                 end
             end
         end

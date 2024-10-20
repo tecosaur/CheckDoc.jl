@@ -35,11 +35,13 @@ __init__() = foreach(addface!, CHECKDOC_FACES)
 
 const LEVEL1 = [
     Checks.NonEmpty(),
+    Checks.RogueSpaces(),
     Checks.PublicHaveDoc(),
     Checks.MacrosHaveDoc(),
     Checks.FunctionsHaveDoc(),
     Checks.IncludesAllArgs(),
     Checks.IncludesAllKwargs(),
+    Checks.SignatureGiven(),
     Checks.SignatureMatches(),
     Checks.MentionsPotentialErrors(),
 ]
@@ -49,17 +51,16 @@ const LEVEL2 = append!([
     Checks.ModulesHaveDoc(),
     Checks.TypesHaveDoc(),
     Checks.VariablesHaveDoc(),
-    Checks.RogueSpaces(),
 ], LEVEL1)
 
 const LEVEL3 = append!([
-    Checks.VerbVoice(),
     Checks.ProperNouns(),
-    Checks.SentencePunctuation(),
+    Checks.ParagraphTermination(),
+    Checks.SentenceCapitalization(),
     Checks.SectionCapitalization(),
-    Checks.SummaryLine(),
+    Checks.HasSummary(),
     Checks.SummaryBrief(),
-    Checks.SummarySentence(),
+    Checks.SummaryVerbVoice(),
 ], LEVEL2)
 
 const DEFAULT_CHECKS = LEVEL3

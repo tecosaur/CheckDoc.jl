@@ -50,7 +50,7 @@ function bindings(mod::Module)
             val = getglobal(submod, name)
             if val isa Module && parentmodule(val) === submod
                 val ∉ seen && addbinds!(to, seen, val)
-            elseif val isa Function || val isa Type
+            elseif val isa Function || (val isa Type && typeof(val) ∉ (Union, UnionAll, Core.TypeofBottom))
                 parentmodule(val) === submod &&
                     push!(to, Binding(submod, name))
             else # Variable
