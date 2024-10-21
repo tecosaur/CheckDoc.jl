@@ -79,7 +79,7 @@ function groupkind(name::Symbol)
     elseif name ∈ (:name, :entity)
         Binding
     elseif name ∈ (:issue, :kind, :check)
-        Type{<:AbstractCheck}
+        AbstractCheck
     else
         throw(ArgumentError("Unknown grouping key: $name"))
     end
@@ -94,7 +94,7 @@ function groupissues(issues::Vector{DocIssue}, gkind::Type)::Vector{Pair{gkind, 
         elseif gkind === Binding
             issue.binding
         else
-            typeof(issue.check)
+            issue.check
         end
         if haskey(groups, gkey)
             push!(groups[gkey], issue)
@@ -154,35 +154,71 @@ function Base.show(io::IO, ::MIME"text/plain", report::DocsReport{G1, G2}) where
         print(io, styled" {grey:(severity ≥ $(report.maxlevel))}")
     end
     icount = 0
-    gstyle(group::Type{Int}, issues::Vector{DocIssue}) =
-        get(SEVERITIES, first(issues).severity, (:bright_black, "Unknown"))
-    gstyle(group::Type{Binding}, issues::Vector{DocIssue}) =
-        :code, chopprefix(string(first(issues).binding), "$(report.mod).")
-    gstyle(group::Type{Type{<:CheckDoc.AbstractCheck}}, issues::Vector{DocIssue}) =
+    wrapwidth = min(96, last(displaysize(io)))
+    gstyle(severity::Int, issues::Vector{DocIssue}) =
+        get(SEVERITIES, severity, (:bright_black, "Unknown"))
+    gstyle(bind::Binding, issues::Vector{DocIssue}) =
+        :code, chopprefix(string(bind), "$(report.mod).")
+    gstyle(check::CheckDoc.AbstractCheck, issues::Vector{DocIssue}) =
         (if allequal(i -> i.severity, issues)
              get(SEVERITIES, first(issues).severity, (:bright_black, "")) |> first
          else
              :default
          end,
-         label(first(issues).check))
-    G3 = first(setdiff((Int, Binding, Type{<:CheckDoc.AbstractCheck}), (G1, G2)))
+         label(check))
+    seen_explanations = Set{AbstractCheck}()
     for (group, sgroup) in report.issues
         (isempty(sgroup) || all(isempty ∘ last, sgroup)) && continue
         groupissues = collect(Iterators.map(last, sgroup) |> Iterators.flatten)
-        gface, glabel = gstyle(G1, groupissues)
+        gface, glabel = gstyle(group, groupissues)
         print(io, styled"\n{$gface:╭─● {bold:$glabel} ($(length(groupissues)))}")
+        if G1 == AbstractCheck && group ∉ seen_explanations
+            push!(seen_explanations, group)
+            explain = explanation(subgroup)
+            if !isnothing(explain)
+                for line in wraplines(explain, wrapwidth - 2)
+                    print(io, styled"\n{$gface:│} {italic,light:$line}")
+                end
+            end
+        end
         for (subgroup, issues) in sgroup
-            sgface, sglabel = gstyle(G2, issues)
+            sgface, sglabel = gstyle(subgroup, issues)
             print(io, styled"\n{$gface:│} {$sgface:┌ $sglabel ($(length(issues)))}")
+            gutterprefix_cc = styled"\n{$gface:│} {$sgface:┆} "
+            gutterprefix_ce = styled"\n{$gface:│} {$sgface:└} "
+            gutterprefix_ee = styled"\n{$gface:╰} {$sgface:└} "
             samemessage = allequal(i -> i.message, issues)
-            samemessage &&
-                print(io, styled"{$sgface::} ", first(issues).message)
-            gutterprefix_cc = styled"\n{$gface:│} {$sgface:┆}"
-            gutterprefix_ce = styled"\n{$gface:│} {$sgface:└}"
-            gutterprefix_ee = styled"\n{$gface:╰} {$sgface:└}"
+            if samemessage
+                lines = wraplines(first(issues).message,
+                                  wrapwidth - textwidth(gutterprefix_cc) - 2,
+                                  textwidth(sglabel) + 3 + ndigits(length(issues)))
+                for (i, line) in enumerate(lines)
+                    if i == 1
+                        print(io, styled"{$sgface::} ", line)
+                    else
+                        print(io, gutterprefix_cc, ' '^2, line)
+                    end
+                end
+            end
+            if G2 == AbstractCheck && group ∉ seen_explanations
+                push!(seen_explanations, subgroup)
+                explain = explanation(subgroup)
+                if !isnothing(explain)
+                    for line in wraplines(explain, wrapwidth - textwidth(gutterprefix_cc))
+                        print(io, gutterprefix_cc, styled"{italic,light:$line}")
+                    end
+                end
+            end
             for issue in issues
                 icount += 1
-                iface, ilabel = gstyle(G3, [issue])
+                ssgroup = if G1 ∈ (Int, Binding) && G2 ∈ (Int, Binding)
+                    issue.check
+                elseif G1 === Int
+                    issue.binding
+                else
+                    issue.severity
+                end
+                iface, ilabel = gstyle(ssgroup, [issue])
                 print(io, if !samemessage
                           gutterprefix_cc
                       elseif issue == last(issues) && subgroup == first(last(sgroup))
@@ -192,18 +228,63 @@ function Base.show(io::IO, ::MIME"text/plain", report::DocsReport{G1, G2}) where
                       else
                           gutterprefix_cc
                       end,
-                      styled" {bold:$(lpad(icount, ndigits(totalissues))).} {$iface:$ilabel} $(srcloc(issue))")
+                      styled"{bold:$(lpad(icount, ndigits(totalissues))).} {$iface:$ilabel} $(srcloc(issue))")
                 if !samemessage
-                    print(io, if issue == last(issues) && subgroup == first(last(sgroup))
-                              gutterprefix_ee
-                          elseif issue == last(issues)
-                              gutterprefix_ce
-                          else
-                              gutterprefix_cc
-                          end,
-                          ' '^(2+ndigits(totalissues)), ' ', issue.message)
+                    lines = wraplines(issue.message, wrapwidth - textwidth(gutterprefix_cc) - 2 - ndigits(totalissues))
+                    for (i, line) in enumerate(lines)
+                        gprefix = if issue != last(issues) || i < lastindex(lines)
+                            gutterprefix_cc
+                        elseif subgroup == first(last(sgroup))
+                            gutterprefix_ee
+                        else
+                            gutterprefix_ce
+                        end
+                        print(io, gprefix, ' '^(2+ndigits(totalissues)), line)
+                    end
                 end
             end
         end
     end
+end
+
+"""
+    wraplines(content::AnnotatedString, width::Integer = 80, column::Integer = 0)
+
+Wrap `content` into a vector of lines of at most `width` (according to
+`textwidth`), with the first line starting at `column`.
+"""
+function wraplines(content::Union{Annot, SubString{<:Annot}}, width::Integer = 80, column::Integer = 0) where { Annot <: AnnotatedString}
+    s, lines = String(content), SubString{Annot}[]
+    i, lastwrap, slen = firstindex(s), 0, ncodeunits(s)
+    most_recent_break_opportunity = 1
+    while i < slen
+        if isspace(s[i]) && s[i] != '\n'
+            most_recent_break_opportunity = i
+        elseif s[i] == '\n'
+            push!(lines, content[nextind(s, lastwrap):prevind(s, i)])
+            lastwrap = i
+            column = 0
+        elseif column >= width && most_recent_break_opportunity > 1
+            if lastwrap == most_recent_break_opportunity
+                nextbreak = findfirst(isspace, @view s[nextind(s, lastwrap):end])
+                if isnothing(nextbreak)
+                    break
+                else
+                    most_recent_break_opportunity = lastwrap + nextbreak
+                end
+                i = most_recent_break_opportunity
+            else
+                i = nextind(s, most_recent_break_opportunity)
+            end
+            push!(lines, content[nextind(s, lastwrap):prevind(s, most_recent_break_opportunity)])
+            lastwrap = most_recent_break_opportunity
+            column = 0
+        end
+        column += textwidth(s[i])
+        i = nextind(s, i)
+    end
+    if lastwrap < slen
+        push!(lines, content[nextind(s, lastwrap):end])
+    end
+    lines
 end

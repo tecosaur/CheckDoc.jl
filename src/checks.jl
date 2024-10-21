@@ -1,17 +1,20 @@
 module Checks
 
+module Internals
+
 using Markdown
 using InteractiveUtils
 using CodeTracking
-using StyledStrings: @styled_str as @S_str
+using StyledStrings: @styled_str as @S_str, AnnotatedString
 
-using ..CheckDoc
+using ...CheckDoc
 using CheckDoc: AbstractCheck, DocContext, ShortIssue, mdfindall, extract_signature, docfunction, astsearch
-import CheckDoc: check, applicable, priority, terminal
+import CheckDoc: check, applicable, priority, terminal, label, explanation
 
 abstract type ExistenceCheck <: AbstractCheck end
 
-struct HasDoc <: ExistenceCheck end
+struct AllHaveDoc <: ExistenceCheck end
+struct ExportsHaveDoc <: ExistenceCheck end
 struct PublicHaveDoc <: ExistenceCheck end
 struct ModulesHaveDoc <: ExistenceCheck end
 struct FunctionsHaveDoc <: ExistenceCheck end
@@ -19,7 +22,8 @@ struct MacrosHaveDoc <: ExistenceCheck end
 struct TypesHaveDoc <: ExistenceCheck end
 struct VariablesHaveDoc <: ExistenceCheck end
 
-applicable(::HasDoc, ::Symbol) = true
+applicable(::AllHaveDoc, ::Symbol) = true
+applicable(::ExportsHaveDoc, ::Symbol) = true
 applicable(::PublicHaveDoc, ::Symbol) = true
 applicable(::ModulesHaveDoc, kind::Symbol) = kind === :module
 applicable(::FunctionsHaveDoc, kind::Symbol) = kind === :function
@@ -34,22 +38,45 @@ function check(::ExistenceCheck, doc::DocContext)
 end
 terminal(::ExistenceCheck) = true
 
+function check(::ExportsHaveDoc, doc::DocContext)
+    isdefined(doc.binding.mod, doc.binding.var) || return
+    getglobal(doc.binding.mod, doc.binding.var) isa Module && return
+    if isnothing(doc.parsed) && Base.isexported(doc.binding.mod, doc.binding.var) &&
+        !(!isnothing(doc.alias) && Base.isexported(doc.alias.mod, doc.alias.var))
+        ShortIssue(:error, "Should be documented")
+    end
+end
+
 @static if VERSION >= v"1.11"
     function check(::PublicHaveDoc, doc::DocContext)
+        strictpublic(mod::Module, var::Symbol) =
+            Base.ispublic(mod, var) && !Base.isexported(mod, var)
         isdefined(doc.binding.mod, doc.binding.var) || return
-        if isnothing(doc.parsed) && Base.ispublic(doc.binding.mod, doc.binding.var) &&
-            !(!isnothing(doc.alias) && Base.ispublic(doc.alias.mod, doc.alias.var))
+        getglobal(doc.binding.mod, doc.binding.var) isa Module && return
+        if isnothing(doc.parsed) && strictpublic(doc.binding.mod, doc.binding.var) &&
+            !(!isnothing(doc.alias) && strictpublic(doc.alias.mod, doc.alias.var))
             ShortIssue(:error, "Should be documented")
         end
     end
 end
 
-priority(::Type{PublicHaveDoc}) = -96
-priority(::Type{FunctionsHaveDoc}) = -95
-priority(::Type{MacrosHaveDoc}) = -94
-priority(::Type{TypesHaveDoc}) = -93
-priority(::Type{VariablesHaveDoc}) = -92
-priority(::Type{<:ExistenceCheck}) = -90
+priority(::ExportsHaveDoc) = -96
+priority(::PublicHaveDoc) = -95
+priority(::FunctionsHaveDoc) = -94
+priority(::MacrosHaveDoc) = -93
+priority(::TypesHaveDoc) = -92
+priority(::VariablesHaveDoc) = -91
+priority(::ExistenceCheck) = -90
+
+explanation(::ExportsHaveDoc) =
+    S"Exported functions, types, and variables should have documentation strings. \
+      This helps users understand how to use them and what they do."
+explanation(::PublicHaveDoc) =
+    S"Public functions, types, and variables should have documentation strings. \
+      This helps users understand how to use them and what they do."
+explanation(::ExistenceCheck) =
+    S"Docstrings explaining purpose and usage are helpful regardless of whether \
+      they're user-facing or internal."
 
 abstract type ContentsCheck <: AbstractCheck end
 
@@ -66,7 +93,7 @@ function check(::NonEmpty, doc::DocContext)
     end
 end
 
-priority(::Type{NonEmpty}) = -80
+priority(::NonEmpty) = -80
 terminal(::NonEmpty) = true
 
 struct MentionsPotentialErrors <: ContentsCheck end
@@ -139,6 +166,10 @@ function check(::IncludesAllArgs, doc::DocContext{Markdown.MD})
     issues
 end
 
+explanation(::IncludesAllArgs) =
+    S"What's obvious naming to one person can be opaque to another. \
+      It's often worth explicitly mentioning all arguments in the docstring."
+
 struct IncludesAllKwargs <: ContentsCheck end
 
 applicable(::IncludesAllKwargs, kind::Symbol) =
@@ -165,9 +196,13 @@ function check(::IncludesAllKwargs, doc::DocContext{Markdown.MD})
     issues
 end
 
-struct SignatureGiven <: ContentsCheck end
+explanation(::IncludesAllKwargs) =
+    S"What's obvious naming to one person can be opaque to another. \
+      It's worth explicitly mentioning all keyword arguments in the docstring."
 
-function check(::SignatureGiven, doc::DocContext{Markdown.MD})
+struct SignatureFirst <: ContentsCheck end
+
+function check(::SignatureFirst, doc::DocContext{Markdown.MD})
     isempty(doc.parsed.content) && return
     first(doc.parsed.content) isa Markdown.Code && return
     nested = first(doc.parsed.content)
@@ -175,6 +210,11 @@ function check(::SignatureGiven, doc::DocContext{Markdown.MD})
         first(nested.content) isa Markdown.Code && return
     ShortIssue(:error, "The call signature should be given at the start")
 end
+
+explanation(::SignatureFirst) =
+    S"Putting the call signature at the start of the docstring is a \
+      firmly entrenched convention in Julia. It makes it easier to \
+      quickly understand what a function does and how to use it."
 
 struct SignatureMatches <: ContentsCheck end
 
@@ -198,6 +238,10 @@ function check(::SignatureMatches, doc::DocContext{Markdown.MD})
     ShortIssue(:warning, S"The initial call signature appears to be about {code:$signame} not {code:$fname}")
 end
 
+explanation(::SignatureMatches) =
+    S"The documented name of a function should match its name in the documented signature.
+      Often due to refactoring drift, a function's name can end up out of sync with its docstring."
+
 struct RogueSpaces <: ContentsCheck end
 
 function check(::RogueSpaces, doc::DocContext)
@@ -210,9 +254,60 @@ end
 
 abstract type WritingStyleCheck <: AbstractCheck end
 
-struct SummaryVerbVoice <: WritingStyleCheck end
+struct SummaryStyleCheck{F} <: WritingStyleCheck
+    label::String
+    checkfn::F
+    kinds::Union{Nothing, Vector{Symbol}}
+    priority::Int
+    explanation::Union{Nothing, String, AnnotatedString{String}}
+end
 
-const COMMON_WRONG_VERB_VOICES = Dict(
+function check(ssc::SummaryStyleCheck, doc::DocContext)
+    paras = mdfindall(Markdown.Paragraph, doc.parsed)
+    isempty(paras) && return
+    content = strip(sprint(print, Markdown.MD([first(paras)])))
+    isempty(content) && return
+    ssc.checkfn(content)
+end
+
+application(::SummaryStyleCheck, kind::Symbol) = isnothing(scc.kinds) || kind in ssc.kinds
+label(ssc::SummaryStyleCheck) = ssc.label
+priority(ssc::SummaryStyleCheck) = ssc.priority
+explanation(ssc::SummaryStyleCheck) = ssc.explanation
+
+const SUMMARY_MAX_LENGTH = 92
+
+function brief_summary(content::AbstractString)
+    if textwidth(content) > SUMMARY_MAX_LENGTH
+        ShortIssue(:suggestion, S"The summary is currently {warning:$(textwidth(content))} {bold:>} {success:$SUMMARY_MAX_LENGTH} characters long")
+    end
+end
+
+const SummaryBrief =
+    SummaryStyleCheck("SummaryBrief", brief_summary, nothing, 5,
+                      S"It is good to have a short overview of the purpose of a function/variable/etc.")
+
+const COMMON_NONIMPERATIVE_OPENINGS = Set([
+    "a", "an", "basic", "common", "current", "custom", "data",
+    "default", "does", "example", "function", "generic", "handler",
+    "helper", "here", "hook", "internal", "it", "main", "method",
+    "module", "new", "number", "optional", "placeholder", "reference",
+    "result", "same", "setup", "should", "simple", "some", "special",
+    "static", "string", "that", "these", "this", "unique", "unit",
+    "utility", "what", "wrapper"
+])
+
+function first_word_nonimperative(line::AbstractString)
+    word = first(eachsplit(line))
+    if lowercase(word) ∈ COMMON_NONIMPERATIVE_OPENINGS
+        ShortIssue(:suggestion, S"The summary should not start with the non-imperative opening {emphasis:$word}")
+    end
+end
+
+const SummaryStartsImperatively =
+    SummaryStyleCheck("SummaryStartsImperatively", first_word_nonimperative, nothing, 11, nothing)
+
+const COMMON_IMPERATIVE_MOOD_TRANSFORMS = Dict(
     "adds" => "add",
     "allows" => "allow",
     "appends" => "append",
@@ -297,56 +392,112 @@ const COMMON_WRONG_VERB_VOICES = Dict(
     "yanks" => "yank",
 )
 
-function check(::SummaryVerbVoice, doc::DocContext{Markdown.MD})
+function all_imperative_words(line::AbstractString)
+    issues = ShortIssue[]
+    for word in split(line)
+        wlower = lowercase(word)
+        if haskey(COMMON_IMPERATIVE_MOOD_TRANSFORMS, wlower)
+            push!(issues, ShortIssue(:suggestion, S"The verb {emphasis:$word} should be voiced as the imperative {emphasis:$(COMMON_IMPERATIVE_MOOD_TRANSFORMS[wlower])}"))
+        end
+    end
+    issues
+end
+
+const SummaryImperativeMood =
+    SummaryStyleCheck(
+        "SummaryImperativeMood", all_imperative_words, [:function], 10,
+        S"The imperative mood is recommended by the {(underline=blue),link={https://docs.julialang.org/en/v1/manual/documentation/#Writing-Documentation}:Julia manual} \
+          over the indicative mood. Writing in the imperative mood forms a grammatically \
+          {italic:complete} sentence with no dangling antecedent, and is often more concise and direct. \
+          Think of it as describing the action of the function as a command the user gives to \
+          the computer by calling the method.")
+
+struct ParagraphCheck{F} <: WritingStyleCheck
+    label::String
+    checkfn::F
+    kinds::Union{Nothing, Vector{Symbol}}
+    priority::Int
+    explanation::Union{Nothing, String, AnnotatedString{String}}
+end
+
+function check(ssc::ParagraphCheck, doc::DocContext)
     paras = mdfindall(Markdown.Paragraph, doc.parsed)
     isempty(paras) && return
     issues = ShortIssue[]
-    content = strip(sprint(print, Markdown.MD([first(paras)])))
-    for word in split(content)
-        wlower = lowercase(word)
-        if haskey(COMMON_WRONG_VERB_VOICES, wlower)
-            push!(issues, ShortIssue(:suggestion, S"The verb {emphasis:$word} should be voiced as {emphasis:$(COMMON_WRONG_VERB_VOICES[wlower])}"))
+    for para in paras
+        content = strip(sprint(print, Markdown.MD([para])))
+        all(isspace, content) && continue
+        result = ssc.checkfn(content)
+        if result isa ShortIssue
+            push!(issues, result)
+        elseif result isa Vector{ShortIssue}
+            append!(issues, result)
         end
     end
     issues
 end
 
-struct ProperNouns <: WritingStyleCheck end
+application(::ParagraphCheck, kind::Symbol) = isnothing(scc.kinds) || kind in ssc.kinds
+label(ssc::ParagraphCheck) = ssc.label
+priority(ssc::ParagraphCheck) = ssc.priority
+explanation(ssc::ParagraphCheck) = ssc.explanation
 
-const PROPER_NOUNS = Set(["julia"])
+const PROPER_NOUNS_LOWER = Set(["julia"])
 
-function check(::ProperNouns, doc::DocContext{Markdown.MD})
-    paras = mdfindall(Markdown.Paragraph, doc.parsed)
+function capitalized_proper_nouns(para::AbstractString)
     issues = ShortIssue[]
-    for para in paras
-        content = strip(sprint(print, Markdown.MD([para])))
-        for word in split(content)
-            if word in PROPER_NOUNS
-                push!(issues, ShortIssue(:suggestion, S"The proper noun {emphasis:$word} should be capitalised"))
-            end
+    for word in split(para)
+        if word in PROPER_NOUNS_LOWER
+            push!(issues, ShortIssue(:suggestion, S"The proper noun {emphasis:$word} should be capitalised"))
         end
     end
     issues
 end
 
-struct ParagraphTermination <: WritingStyleCheck end
+const ParagraphProperNouns =
+    ParagraphCheck("ParagraphProperNouns", capitalized_proper_nouns, nothing, 20, nothing)
 
-function check(::ParagraphTermination, doc::DocContext{Markdown.MD})
-    paras = mdfindall(Markdown.Paragraph, doc.parsed)
+const TERMINATING_PUNCTUATION = ('.', '!', '?', ':')
+
+function punctuation_terminated(content::AbstractString)
+    if last(content) ∉ TERMINATING_PUNCTUATION
+        tail = if textwidth(content) < 15
+            S"{green:$content}"
+        else
+            S"{shadow:…}{green:$(content[thisind(content, end-14):end])}"
+        end
+        punctoptions = join(map(c -> S"{emphasis:$c}", TERMINATING_PUNCTUATION), ", ", ", or ")
+        ShortIssue(:suggestion, S"Paragraph \"$tail\" should be terminated with a punctuation mark ($punctoptions)")
+    end
+end
+
+const ParagraphTermination =
+    ParagraphCheck("ParagraphTermination", punctuation_terminated, nothing, 18, nothing)
+
+function sentence_capitalized(content::AbstractString)
     issues = ShortIssue[]
-    for para in paras
-        content = strip(sprint(print, Markdown.MD([para])))
-        if last(content) ∉ ('.', '!', '?', ':')
-            tail = if textwidth(content) < 15
-                S"{green:$content}"
+    skipnext = false
+    for sentence in eachsplit(content, ". ")
+        if skipnext
+            skipnext = false
+        elseif islowercase(first(sentence))
+            head = if textwidth(sentence) < 15
+                sentence
             else
-                S"{shadow:…}{green:$(content[thisind(content, end-14):end])}"
+                S"{green:$(sentence[1:thisind(sentence, 15)])}{shadow:…}"
             end
-            push!(issues, ShortIssue(:suggestion, S"Paragraph \"$tail\" should end with a punctuation mark"))
+            push!(issues, ShortIssue(:suggestion, S"Sentence \"$head\" does not start with a capital letter"))
         end
+        lastboundary = something(findlast(c -> isspace(c) || (c != '.' && ispunct(c)), sentence), 0)
+        lastword = sentence[nextind(sentence, lastboundary):end]
+        skipnext = length(lastword) == 1 ||
+            lowercase(lastword) ∈ ("e.g", "i.e", "etc", "et al", "cf", "vs", "a.k.a", "n.b", "misc", "resp", "inc", "univ", "..")
     end
     issues
 end
+
+const SentenceCapitalization =
+    ParagraphCheck("SentenceCapitalization", sentence_capitalized, nothing, 15, nothing)
 
 struct SectionCapitalization <: WritingStyleCheck end
 
@@ -367,34 +518,6 @@ function check(::SectionCapitalization, doc::DocContext{Markdown.MD})
     issues
 end
 
-struct SentenceCapitalization <: WritingStyleCheck end
-
-function check(::SentenceCapitalization, doc::DocContext{Markdown.MD})
-    paras = mdfindall(Markdown.Paragraph, doc.parsed)
-    issues = ShortIssue[]
-    for para in paras
-        content = strip(sprint(print, Markdown.MD([para])))
-        skipnext = false
-        for sentence in eachsplit(content, ". ")
-            if skipnext
-                skipnext = false
-            elseif islowercase(first(sentence))
-                head = if textwidth(sentence) < 15
-                    sentence
-                else
-                    S"{green:$(sentence[1:thisind(sentence, 15)])}{shadow:…}"
-                end
-                push!(issues, ShortIssue(:suggestion, S"Sentence \"$head\" does not start with a capital letter"))
-            end
-            lastboundary = something(findlast(c -> isspace(c) || (c != '.' && ispunct(c)), sentence), 0)
-            lastword = sentence[nextind(sentence, lastboundary):end]
-            skipnext = length(lastword) == 1 ||
-                lowercase(lastword) ∈ ("e.g", "i.e", "etc", "et al", "cf", "vs", "a.k.a", "n.b", "misc", "resp", "inc", "univ", "..")
-        end
-    end
-    issues
-end
-
 abstract type StructureCheck <: AbstractCheck end
 
 struct HasSummary <: StructureCheck end
@@ -406,17 +529,7 @@ function check(::HasSummary, doc::DocContext{Markdown.MD})
     end
 end
 
-struct SummaryBrief <: StructureCheck end
-
-function check(::SummaryBrief, doc::DocContext{Markdown.MD})
-    paras = mdfindall(Markdown.Paragraph, doc.parsed)
-    isempty(paras) && return
-    firstpara = first(paras)
-    paralen = textwidth(strip(sprint(print, Markdown.MD([first(paras)]))))
-    if paralen > 96
-        ShortIssue(:suggestion, S"The summary line should be brief, but is currently {warning:$paralen} {bold:>} {success:96} characters long")
-    end
-end
+priority(::HasSummary) = -20
 
 struct QuotedSymbols <: StructureCheck end
 
@@ -439,5 +552,90 @@ function check(::ArgsInOrder, doc::DocContext{Markdown.MD})
         ShortIssue(:tip, S"It is nice to describe the arguments in the same order they are listed in the signature ($given rather than $mentioned).")
     end
 end
+
+priority(::ArgsInOrder) = 50
+
+struct HasReturnType <: StructureCheck end
+
+applicable(::HasReturnType, kind::Symbol) =
+    kind === :function
+
+function check(::HasReturnType, doc::DocContext{Markdown.MD})
+    sig = extract_signature(doc.parsed)
+    !isnothing(sig) || return
+    if isnothing(sig.returntype)
+        ShortIssue(:warning, "Should mention the return type")
+    end
+end
+
+struct MaximumLineLength <: StructureCheck
+    length::Int
+end
+
+function check(mll::MaximumLineLength, doc::DocContext{Markdown.MD})
+    issues = ShortIssue[]
+    for line in eachsplit(doc.raw, '\n')
+        if textwidth(line) > mll.length
+            truncline = if textwidth(line) < 20
+                S"{green:$line}"
+            else
+                S"{green:$(line[1:thisind(line, 9)]){shadow:…}$(line[thisind(line, end-9):end])}"
+            end
+            push!(issues, ShortIssue(:suggestion, S"Line \"$truncline\" is {warning:$(textwidth(line))} characters long"))
+        end
+    end
+    issues
+end
+
+explanation(mll::MaximumLineLength) =
+    S"Keeping lines to a reasonable length in the docstring source makes it easier \
+      to read and maintain, as we use the same programs as for code. Try to keep lines \
+      under {emphasis:$(mll.length)} characters long."
+
+priority(::MaximumLineLength) = 30
+
+const MAX_LINE_LENGTH = 92
+
+const MaxLineLength = MaximumLineLength(MAX_LINE_LENGTH)
+
+end
+
+# The public bits
+
+@static if VERSION >= v"1.11"
+    eval(Expr(:public, :HasDoc, :Style, :Structure))
+end
+
+const HasDoc =
+    (All = Internals.AllHaveDoc(),
+     Exports = Internals.ExportsHaveDoc(),
+     Public = Internals.PublicHaveDoc(),
+     Modules = Internals.ModulesHaveDoc(),
+     Functions = Internals.FunctionsHaveDoc(),
+     Macros = Internals.MacrosHaveDoc(),
+     Types = Internals.TypesHaveDoc(),
+     Variables = Internals.VariablesHaveDoc())
+
+const Style =
+    (ArgsInOrder = Internals.ArgsInOrder(),
+     Summary = (IsBrief = Internals.SummaryBrief,
+                ImperativeOpening = Internals.SummaryStartsImperatively,
+                ImperativeMood = Internals.SummaryImperativeMood),
+     Text = (ProperNouns = Internals.ParagraphProperNouns,
+             Termination = Internals.ParagraphTermination,
+             Capitalization = Internals.SentenceCapitalization),
+     Section = (; Capitalization = Internals.SectionCapitalization()))
+
+const Structure =
+    (NonEmpty = Internals.NonEmpty(),
+     MentionsPotentialErrors = Internals.MentionsPotentialErrors(),
+     IncludesAllArgs = Internals.IncludesAllArgs(),
+     IncludesAllKwargs = Internals.IncludesAllKwargs(),
+     SignatureFirst = Internals.SignatureFirst(),
+     SignatureMatches = Internals.SignatureMatches(),
+     HasSummary = Internals.HasSummary(),
+     HasReturnType = Internals.HasReturnType(),
+     RogueSpaces = Internals.RogueSpaces(),
+     MaxLineLength = Internals.MaxLineLength)
 
 end

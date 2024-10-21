@@ -14,7 +14,8 @@ julia> checkdocs(MyPackage)
 
 *Target docstring format*
 
-The built-in rules ask you to formulate docstrings like so:
+This built-in rules encourage adherence to the [[https://docs.julialang.org/en/v1/manual/documentation/#Writing-Documentation][Julia manual]]'s suggested style,
+along with some extra rules to help aid clarity and consistency.
 
 #+begin_src text
     SIGNATURE

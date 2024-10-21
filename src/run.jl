@@ -44,7 +44,7 @@ function bindings(mod::Module; recurse::Bool=true)
     function addbinds!(to::Vector{Binding}, seen::Set{Module}, submod::Module, recurse::Bool)
         push!(seen, submod)
         for name in names(submod, all=true)
-            name ∈ (:eval, :include, :__init__) && continue
+            name ∈ (:eval, :include) && continue
             isdefined(submod, name) || continue
             startswith(String(name), '#') && continue
             val = getglobal(submod, name)

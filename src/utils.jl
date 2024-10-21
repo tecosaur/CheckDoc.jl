@@ -90,11 +90,19 @@ function parse_signature(sig::String)
     # TODO extract /all/ signatures
     exprs = Meta.parseall(sig)
     expr = first(filter(e -> !(e isa LineNumberNode), exprs.args))
+    returntype = nothing
     if Meta.isexpr(expr, :(=), 2)
         expr = last(expr.args)
     end
-    if Meta.isexpr(expr, :(::), 2) || Meta.isexpr(expr, :->, 2)
-        expr = first(expr.args)
+    if Meta.isexpr(expr, :(::), 2)
+        expr, returntype = expr.args
+    elseif Meta.isexpr(expr, :->, 2)
+        expr, retblock = expr.args
+        returntype = if Meta.isexpr(retblock, :block, 2) && retblock.args[1] isa LineNumberNode
+            retblock.args[2]
+        else
+            retblock
+        end
     end
     function interpretarg(arg; kw::Bool=false)
         hasdefault = false
@@ -147,7 +155,7 @@ function parse_signature(sig::String)
         args = Tuple{Vector{Symbol}, Union{Symbol, Expr}, Bool}[]
         kwargs = Tuple{Symbol, Union{Symbol, Expr}, Bool}[]
         argnames = Symbol[]
-        length(expr.args) == 1 && return (; func, args, kwargs, argnames)
+        length(expr.args) == 1 && return (; func, args, kwargs, argnames, returntype)
         if Meta.isexpr(expr.args[2], :parameters)
             kws = Tuple{Vector{Symbol}, Union{Symbol, Expr}, Bool}[]
             for kw in expr.args[2].args
@@ -162,7 +170,7 @@ function parse_signature(sig::String)
             append!(argnames, a)
         end
         append!(argnames, map(first, kwargs))
-        (; func, args, kwargs, argnames)
+        (; func, args, kwargs, argnames, returntype)
     end
 end
 

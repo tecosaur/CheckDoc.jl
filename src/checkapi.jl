@@ -66,10 +66,8 @@ applicable(::AbstractCheck, ::Symbol) = true
 
 How important it is that `check` is satisfied.
 
-`check` can be either a type or an instance of a check. The generic
-instance-based method forwards to the type-based method.
-
-Lower values are considered more important, and the default is `0`.
+`check` can be either a type or an instance of a check. Lower values are
+considered more important, and the default is `0`.
 
 This affects the order in which checks are run, with more important checks
 run first. In turn, this affects when a [`terminal`](@ref) result may be hit,
@@ -77,8 +75,7 @@ and the order in which issues are displayed.
 """
 function priority end
 
-priority(::Type{<:AbstractCheck}) = 0
-priority(c::AbstractCheck) = priority(typeof(c))
+priority(::AbstractCheck) = 0
 
 """
     terminal(check::AbstractCheck, doc::DocContext) -> Bool
@@ -98,3 +95,12 @@ A human-readable label for `check`.
 The generic implementation returns the name of the type.
 """
 label(c::AbstractCheck) = String(nameof(typeof(c)))
+
+"""
+    explanation(check::AbstractCheck) -> Union{Nothing, String, AnnotatedString{String}}
+
+An explanation for why `check` matters.
+"""
+function explanation end
+
+explanation(::AbstractCheck) = nothing
